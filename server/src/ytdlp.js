@@ -1,7 +1,32 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getConfig } from "./config.js";
+
+let cookiesMissingLogged = false;
+
+/** Global yt-dlp flags: ffmpeg path, then YouTube auth cookies if configured. */
+function ytdlpPrelude() {
+  const { ffmpegLocation, ytdlpCookiesFile, ytdlpCookiesFromBrowser } = getConfig();
+  const out = [];
+  if (ffmpegLocation) {
+    out.push("--ffmpeg-location", ffmpegLocation);
+  }
+  if (ytdlpCookiesFile) {
+    if (existsSync(ytdlpCookiesFile)) {
+      out.push("--cookies", ytdlpCookiesFile);
+    } else if (!cookiesMissingLogged) {
+      cookiesMissingLogged = true;
+      console.warn(
+        `[ytdlp] YTDLP_COOKIES_FILE is set but file not found: ${ytdlpCookiesFile}`
+      );
+    }
+  } else if (ytdlpCookiesFromBrowser) {
+    out.push("--cookies-from-browser", ytdlpCookiesFromBrowser);
+  }
+  return out;
+}
 
 export class YtdlpError extends Error {
   constructor(message) {
@@ -45,8 +70,8 @@ function runProcess(cmd, args, options = {}) {
 }
 
 export async function runYtdlpJson(args, timeoutMs = 600_000) {
-  const { ytdlpPath, ffmpegLocation } = getConfig();
-  const fullArgs = ffmpegLocation ? ["--ffmpeg-location", ffmpegLocation, ...args] : [...args];
+  const { ytdlpPath } = getConfig();
+  const fullArgs = [...ytdlpPrelude(), ...args];
   const out = await runProcess(ytdlpPath, fullArgs, { timeoutMs });
   const text = out.trim();
   if (!text) return {};
@@ -136,12 +161,13 @@ export async function fetchVideoMetadata(videoId) {
 }
 
 export async function downloadAudioMp3(videoId, mediaDir) {
-  const { ytdlpPath, ffmpegLocation } = getConfig();
+  const { ytdlpPath } = getConfig();
   await fs.mkdir(mediaDir, { recursive: true });
   const final = path.join(mediaDir, `${videoId}.mp3`);
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
   const outTemplate = path.join(mediaDir, `${videoId}.%(ext)s`);
   const args = [
+    ...ytdlpPrelude(),
     "-x",
     "--audio-format",
     "mp3",
@@ -156,7 +182,6 @@ export async function downloadAudioMp3(videoId, mediaDir) {
     "--no-warnings",
     watchUrl,
   ];
-  if (ffmpegLocation) args.unshift("--ffmpeg-location", ffmpegLocation);
   await runProcess(ytdlpPath, args, { cwd: mediaDir, timeoutMs: 1_800_000 });
   try {
     await fs.access(final);

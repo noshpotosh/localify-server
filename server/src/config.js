@@ -19,6 +19,10 @@ export function getConfig() {
     defaultPollIntervalSeconds: intEnv("DEFAULT_POLL_INTERVAL_SECONDS", 3600),
     logLevel: process.env.LOG_LEVEL || "info",
     ytdlpPath: process.env.YTDLP_PATH || "yt-dlp",
+    /** Netscape-format cookies.txt; see yt-dlp wiki “Exporting YouTube cookies”. */
+    ytdlpCookiesFile: process.env.YTDLP_COOKIES_FILE || null,
+    /** e.g. `chrome` — local dev only; not usable in typical Docker images. */
+    ytdlpCookiesFromBrowser: process.env.YTDLP_COOKIES_FROM_BROWSER || null,
     ffmpegLocation: process.env.FFMPEG_LOCATION || null,
     port: intEnv("PORT", 8000),
     host: process.env.HOST || "0.0.0.0",

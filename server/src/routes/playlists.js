@@ -18,7 +18,10 @@ export default async function playlistsRoutes(fastify) {
       let ytid;
       try {
         ytid = parsePlaylistId(urlOrId);
-      } catch {
+      } catch (e) {
+        if (e && e.code === "VIDEO_ONLY" && e.message) {
+          return reply.code(400).send({ detail: e.message });
+        }
         return reply.code(400).send({ detail: "Invalid playlist URL or ID" });
       }
       const userId = request.user.id;
