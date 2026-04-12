@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "migrate": "node src/migrate.js"
+    "migrate": "node src/migrate.js",
+    "kick": "node src/kickScheduler.js"
   },
   "engines": {
     "node": ">=20"

@@ -40,22 +40,39 @@ async function buildServer() {
 
   await fastify.ready();
 
+  const cfg = getConfig();
+  fastify.log.info(
+    {
+      schedulerTickSeconds: cfg.schedulerTickSeconds,
+      defaultPollIntervalSeconds: cfg.defaultPollIntervalSeconds,
+    },
+    "scheduler started (playlist polls only when due per playlist poll_interval_seconds; see logs when work runs)"
+  );
+
   const tick = async () => {
     try {
-      await runDuePolls();
+      const pr = await runDuePolls();
+      if (pr.playlistsDue > 0 || pr.playlistsPollFailed > 0) {
+        fastify.log.info(pr, "playlist poll cycle");
+      }
     } catch (e) {
       fastify.log.error(e, "scheduler poll tick");
     }
     const n = getConfig().maxConcurrentDownloads;
-    await Promise.all(
+    const downloadResults = await Promise.all(
       Array.from({ length: n }, async () => {
         try {
-          await processOneDownload();
+          return await processOneDownload();
         } catch (e) {
           fastify.log.error(e, "scheduler download");
+          return false;
         }
       })
     );
+    const downloadAttempts = downloadResults.filter(Boolean).length;
+    if (downloadAttempts > 0) {
+      fastify.log.info({ downloadJobsAttempted: downloadAttempts }, "download worker cycle");
+    }
   };
 
   timer = setInterval(tick, getConfig().schedulerTickSeconds * 1000);

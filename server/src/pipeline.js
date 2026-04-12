@@ -153,17 +153,22 @@ export async function markPlaylistPollError(playlistId, message) {
 export async function runDuePolls() {
   const sql = getSql();
   const due = await playlistsDueForPoll(sql);
+  let polled = 0;
+  let failed = 0;
   for (const pl of due) {
     const rows = await sql`SELECT * FROM playlists WHERE id = ${pl.id}`;
     const p = rows[0];
     if (!p || !p.enabled) continue;
     try {
       await pollSinglePlaylist(sql, p);
+      polled += 1;
     } catch (e) {
+      failed += 1;
       console.error("poll playlist", pl.id, e);
       await markPlaylistPollError(pl.id, String(e));
     }
   }
+  return { playlistsDue: due.length, playlistsPolled: polled, playlistsPollFailed: failed };
 }
 
 export async function processOneDownload() {
