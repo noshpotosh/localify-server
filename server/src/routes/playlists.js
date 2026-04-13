@@ -13,7 +13,10 @@ function kickInitialSyncAndDrain(playlistId, log) {
         log.warn({ playlistId, sync }, "initial playlist sync failed");
       }
       const d = await drainDownloadQueue();
-      log.info({ playlistId, downloadJobsAttempted: d.jobsAttempted }, "initial playlist: download drain finished");
+      log.info(
+        { playlistId, downloadJobsAttempted: d.jobsAttempted, staleRunningRequeued: d.staleRunningRequeued },
+        "initial playlist: download drain finished"
+      );
     } catch (e) {
       log.error(e, "initial playlist sync/drain");
     }
@@ -102,6 +105,17 @@ export default async function playlistsRoutes(fastify) {
           error: sync.error?.slice(0, 2000),
         });
       }
+      const jobsByStatus = await sql`
+        SELECT dj.status, COUNT(*)::int AS n
+        FROM download_jobs dj
+        INNER JOIN playlist_tracks pt ON pt.track_id = dj.track_id
+        WHERE pt.playlist_id = ${playlistId}
+        GROUP BY dj.status
+      `;
+      request.log.info(
+        { playlistId, downloadJobsByStatus: Object.fromEntries(jobsByStatus.map((r) => [r.status, r.n])) },
+        "playlist refresh: download_jobs for this playlist (after sync)"
+      );
       const pendingRows = await sql`
         SELECT COUNT(*)::int AS n FROM download_jobs WHERE status = 'pending'
       `;
@@ -110,7 +124,7 @@ export default async function playlistsRoutes(fastify) {
         { playlistId, pendingDownloadJobs: pendingBefore },
         "playlist refresh: running download drain (awaited in this request)"
       );
-      let drain = { jobsAttempted: 0 };
+      let drain = { jobsAttempted: 0, staleRunningRequeued: 0 };
       try {
         drain = await drainDownloadQueue();
       } catch (e) {
@@ -121,10 +135,19 @@ export default async function playlistsRoutes(fastify) {
         });
       }
       request.log.info(
-        { playlistId, downloadJobsAttempted: drain.jobsAttempted, pendingBefore },
+        {
+          playlistId,
+          downloadJobsAttempted: drain.jobsAttempted,
+          staleRunningRequeued: drain.staleRunningRequeued,
+          pendingBefore,
+        },
         "playlist refresh: download drain finished"
       );
-      return { ok: true, download_jobs_attempted: drain.jobsAttempted };
+      return {
+        ok: true,
+        download_jobs_attempted: drain.jobsAttempted,
+        stale_running_jobs_requeued: drain.staleRunningRequeued,
+      };
     }
   );
 

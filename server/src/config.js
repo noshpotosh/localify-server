@@ -15,6 +15,8 @@ export function getConfig() {
     signedUrlTtlSeconds: intEnv("SIGNED_URL_TTL_SECONDS", 3600),
     maxConcurrentDownloads: intEnv("MAX_CONCURRENT_DOWNLOADS", 2),
     downloadJobMaxAttempts: intEnv("DOWNLOAD_JOB_MAX_ATTEMPTS", 5),
+    /** Jobs left `running` (e.g. deploy/crash) older than this are reset to `pending` before each drain. */
+    downloadJobStaleRunningMinutes: intEnv("DOWNLOAD_STALE_RUNNING_MINUTES", 15),
     defaultPollIntervalSeconds: intEnv("DEFAULT_POLL_INTERVAL_SECONDS", 3600),
     logLevel: process.env.LOG_LEVEL || "info",
     ytdlpPath: process.env.YTDLP_PATH || "yt-dlp",

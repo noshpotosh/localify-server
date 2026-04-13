@@ -32,9 +32,17 @@ function nowUtc() {
   return new Date();
 }
 
+function runningJobIsStale(job, nowMs, staleRunningMs) {
+  if (job.status !== JOB_RUNNING) return false;
+  const updated = new Date(job.updated_at).getTime();
+  return nowMs - updated > staleRunningMs;
+}
+
 export async function pollSinglePlaylist(sql, playlist) {
-  const { downloadJobMaxAttempts } = getConfig();
+  const { downloadJobStaleRunningMinutes } = getConfig();
+  const staleRunningMs = Math.max(1, downloadJobStaleRunningMinutes) * 60 * 1000;
   const now = nowUtc();
+  const nowMs = now.getTime();
   const { entries, playlistTitle } = await flatPlaylistEntries(playlist.youtube_playlist_id);
   if (playlistTitle) {
     await sql`UPDATE playlists SET title = ${playlistTitle} WHERE id = ${playlist.id}`;
@@ -84,9 +92,22 @@ export async function pollSinglePlaylist(sql, playlist) {
             INSERT INTO download_jobs (id, track_id, status, attempts, created_at, updated_at)
             VALUES (${jid}, ${vid}, ${JOB_PENDING}, 0, ${now}, ${now})
           `;
-        } else if (job.status === JOB_FAILED && job.attempts < downloadJobMaxAttempts) {
+        } else if (job.status === JOB_DONE) {
           await tx`
-            UPDATE download_jobs SET status = ${JOB_PENDING}, last_error = NULL, updated_at = ${now}
+            UPDATE download_jobs
+            SET status = ${JOB_PENDING}, attempts = 0, last_error = NULL, updated_at = ${now}
+            WHERE track_id = ${vid}
+          `;
+        } else if (runningJobIsStale(job, nowMs, staleRunningMs)) {
+          await tx`
+            UPDATE download_jobs
+            SET status = ${JOB_PENDING}, last_error = NULL, updated_at = ${now}
+            WHERE track_id = ${vid}
+          `;
+        } else if (job.status === JOB_FAILED) {
+          await tx`
+            UPDATE download_jobs
+            SET status = ${JOB_PENDING}, attempts = 0, last_error = NULL, updated_at = ${now}
             WHERE track_id = ${vid}
           `;
         }
@@ -135,10 +156,28 @@ export async function markPlaylistPollError(playlistId, message) {
 const DEFAULT_DRAIN_MAX_JOBS = Math.max(1, parseInt(process.env.PLAYLIST_REFRESH_DRAIN_MAX || "500", 10) || 500);
 
 /**
+ * Workers that died after claiming a job leave `running` forever; pending-only drain ignores them.
+ */
+export async function requeueStaleRunningDownloadJobs(sql) {
+  const minutes = Math.max(1, getConfig().downloadJobStaleRunningMinutes);
+  const threshold = new Date(Date.now() - minutes * 60 * 1000);
+  const now = nowUtc();
+  const rows = await sql`
+    UPDATE download_jobs
+    SET status = ${JOB_PENDING}, last_error = NULL, updated_at = ${now}
+    WHERE status = ${JOB_RUNNING} AND updated_at < ${threshold}
+    RETURNING id
+  `;
+  return rows.length;
+}
+
+/**
  * Runs up to `maxJobs` download job attempts (parallel batching like the former server tick).
  * Stops when no pending jobs remain or cap is hit.
  */
 export async function drainDownloadQueue(maxJobs = DEFAULT_DRAIN_MAX_JOBS) {
+  const sql = getSql();
+  const staleRunningRequeued = await requeueStaleRunningDownloadJobs(sql);
   const { maxConcurrentDownloads } = getConfig();
   let jobsAttempted = 0;
   while (jobsAttempted < maxJobs) {
@@ -149,7 +188,7 @@ export async function drainDownloadQueue(maxJobs = DEFAULT_DRAIN_MAX_JOBS) {
     if (n === 0) break;
     jobsAttempted += n;
   }
-  return { jobsAttempted };
+  return { jobsAttempted, staleRunningRequeued };
 }
 
 /**
