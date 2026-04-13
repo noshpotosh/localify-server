@@ -100,6 +100,17 @@ export default async function playlistsRoutes(fastify) {
         if (sync.reason === "not_found") {
           return reply.code(404).send({ detail: "Playlist not found" });
         }
+        const [ytRow] = await sql`
+          SELECT youtube_playlist_id FROM playlists WHERE id = ${playlistId}
+        `;
+        request.log.warn(
+          {
+            playlistId,
+            youtubePlaylistId: ytRow?.youtube_playlist_id,
+            err: sync.error?.slice(0, 4000),
+          },
+          "playlist refresh: YouTube sync failed (returning 502)"
+        );
         return reply.code(502).send({
           detail: "Could not sync playlist from YouTube",
           error: sync.error?.slice(0, 2000),
