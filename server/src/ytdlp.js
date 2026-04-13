@@ -307,13 +307,15 @@ export async function fetchVideoMetadata(videoId) {
 }
 
 export async function downloadAudioMp3(videoId, mediaDir) {
-  const { ytdlpPath } = getConfig();
+  const { ytdlpPath, ytdlpDownloadFormat } = getConfig();
   await fs.mkdir(mediaDir, { recursive: true });
   const final = path.join(mediaDir, `${videoId}.mp3`);
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
   const outTemplate = path.join(mediaDir, `${videoId}.%(ext)s`);
   const args = [
     ...ytdlpPrelude(),
+    "-f",
+    ytdlpDownloadFormat,
     "-x",
     "--audio-format",
     "mp3",
