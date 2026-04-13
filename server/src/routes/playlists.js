@@ -5,17 +5,6 @@ import { parsePlaylistId } from "../youtubeId.js";
 import { fetchPlaylistTitleQuick } from "../ytdlp.js";
 import { trySyncPlaylist, drainDownloadQueue } from "../pipeline.js";
 
-function kickDownloadDrain(log) {
-  void (async () => {
-    try {
-      const d = await drainDownloadQueue();
-      if (d.jobsAttempted > 0) log.info(d, "download drain");
-    } catch (e) {
-      log.error(e, "download drain failed");
-    }
-  })();
-}
-
 function kickInitialSyncAndDrain(playlistId, log) {
   void (async () => {
     try {
@@ -24,7 +13,7 @@ function kickInitialSyncAndDrain(playlistId, log) {
         log.warn({ playlistId, sync }, "initial playlist sync failed");
       }
       const d = await drainDownloadQueue();
-      if (d.jobsAttempted > 0) log.info(d, "initial download drain");
+      log.info({ playlistId, downloadJobsAttempted: d.jobsAttempted }, "initial playlist: download drain finished");
     } catch (e) {
       log.error(e, "initial playlist sync/drain");
     }
@@ -113,8 +102,29 @@ export default async function playlistsRoutes(fastify) {
           error: sync.error?.slice(0, 2000),
         });
       }
-      kickDownloadDrain(request.log);
-      return { ok: true };
+      const pendingRows = await sql`
+        SELECT COUNT(*)::int AS n FROM download_jobs WHERE status = 'pending'
+      `;
+      const pendingBefore = pendingRows[0]?.n ?? 0;
+      request.log.info(
+        { playlistId, pendingDownloadJobs: pendingBefore },
+        "playlist refresh: running download drain (awaited in this request)"
+      );
+      let drain = { jobsAttempted: 0 };
+      try {
+        drain = await drainDownloadQueue();
+      } catch (e) {
+        request.log.error(e, "playlist refresh: download drain threw");
+        return reply.code(500).send({
+          detail: "Download worker failed after sync",
+          error: String(e).slice(0, 2000),
+        });
+      }
+      request.log.info(
+        { playlistId, downloadJobsAttempted: drain.jobsAttempted, pendingBefore },
+        "playlist refresh: download drain finished"
+      );
+      return { ok: true, download_jobs_attempted: drain.jobsAttempted };
     }
   );
 
