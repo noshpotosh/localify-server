@@ -3,6 +3,33 @@ import { requireUser } from "../plugins/auth.js";
 import { getConfig } from "../config.js";
 import { parsePlaylistId } from "../youtubeId.js";
 import { fetchPlaylistTitleQuick } from "../ytdlp.js";
+import { trySyncPlaylist, drainDownloadQueue } from "../pipeline.js";
+
+function kickDownloadDrain(log) {
+  void (async () => {
+    try {
+      const d = await drainDownloadQueue();
+      if (d.jobsAttempted > 0) log.info(d, "download drain");
+    } catch (e) {
+      log.error(e, "download drain failed");
+    }
+  })();
+}
+
+function kickInitialSyncAndDrain(playlistId, log) {
+  void (async () => {
+    try {
+      const sync = await trySyncPlaylist(playlistId);
+      if (!sync.ok && sync.reason !== "not_found") {
+        log.warn({ playlistId, sync }, "initial playlist sync failed");
+      }
+      const d = await drainDownloadQueue();
+      if (d.jobsAttempted > 0) log.info(d, "initial download drain");
+    } catch (e) {
+      log.error(e, "initial playlist sync/drain");
+    }
+  })();
+}
 
 export default async function playlistsRoutes(fastify) {
   fastify.post(
@@ -57,8 +84,37 @@ export default async function playlistsRoutes(fastify) {
       } catch (e) {
         request.log.warn({ err: String(e) }, "playlist title fetch after create");
       }
+      kickInitialSyncAndDrain(pid, request.log);
       reply.code(201);
       return playlistOut(row);
+    }
+  );
+
+  fastify.post(
+    "/v1/playlists/:playlistId/refresh",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const { playlistId } = request.params;
+      const userId = request.user.id;
+      const sql = fastify.sql;
+      const own = await sql`
+        SELECT id FROM playlists WHERE id = ${playlistId} AND user_id = ${userId}
+      `;
+      if (!own.length) {
+        return reply.code(404).send({ detail: "Playlist not found" });
+      }
+      const sync = await trySyncPlaylist(playlistId);
+      if (!sync.ok) {
+        if (sync.reason === "not_found") {
+          return reply.code(404).send({ detail: "Playlist not found" });
+        }
+        return reply.code(502).send({
+          detail: "Could not sync playlist from YouTube",
+          error: sync.error?.slice(0, 2000),
+        });
+      }
+      kickDownloadDrain(request.log);
+      return { ok: true };
     }
   );
 

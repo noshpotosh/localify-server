@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "migrate": "node src/migrate.js",
-    "kick": "node src/kickScheduler.js"
+    "kick": "node src/kickScheduler.js",
+    "register-mp3": "node src/registerManualMp3.js"
   },
   "engines": {
     "node": ">=20"

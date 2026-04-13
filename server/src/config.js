@@ -13,7 +13,6 @@ export function getConfig() {
     downloadSigningSecret:
       process.env.DOWNLOAD_SIGNING_SECRET || "change-me-in-production-use-long-random-secret",
     signedUrlTtlSeconds: intEnv("SIGNED_URL_TTL_SECONDS", 3600),
-    schedulerTickSeconds: intEnv("SCHEDULER_TICK_SECONDS", 30),
     maxConcurrentDownloads: intEnv("MAX_CONCURRENT_DOWNLOADS", 2),
     downloadJobMaxAttempts: intEnv("DOWNLOAD_JOB_MAX_ATTEMPTS", 5),
     defaultPollIntervalSeconds: intEnv("DEFAULT_POLL_INTERVAL_SECONDS", 3600),

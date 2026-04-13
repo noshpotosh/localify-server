@@ -32,24 +32,6 @@ function nowUtc() {
   return new Date();
 }
 
-export async function playlistsDueForPoll(sql) {
-  const rows = await sql`
-    SELECT * FROM playlists WHERE enabled = true
-  `;
-  const now = nowUtc();
-  const due = [];
-  for (const pl of rows) {
-    if (!pl.last_polled_at) {
-      due.push(pl);
-      continue;
-    }
-    const last = new Date(pl.last_polled_at);
-    const intervalMs = Math.max(60, pl.poll_interval_seconds) * 1000;
-    if (now.getTime() - last.getTime() >= intervalMs) due.push(pl);
-  }
-  return due;
-}
-
 export async function pollSinglePlaylist(sql, playlist) {
   const { downloadJobMaxAttempts } = getConfig();
   const now = nowUtc();
@@ -150,25 +132,42 @@ export async function markPlaylistPollError(playlistId, message) {
   `;
 }
 
-export async function runDuePolls() {
-  const sql = getSql();
-  const due = await playlistsDueForPoll(sql);
-  let polled = 0;
-  let failed = 0;
-  for (const pl of due) {
-    const rows = await sql`SELECT * FROM playlists WHERE id = ${pl.id}`;
-    const p = rows[0];
-    if (!p || !p.enabled) continue;
-    try {
-      await pollSinglePlaylist(sql, p);
-      polled += 1;
-    } catch (e) {
-      failed += 1;
-      console.error("poll playlist", pl.id, e);
-      await markPlaylistPollError(pl.id, String(e));
-    }
+const DEFAULT_DRAIN_MAX_JOBS = Math.max(1, parseInt(process.env.PLAYLIST_REFRESH_DRAIN_MAX || "500", 10) || 500);
+
+/**
+ * Runs up to `maxJobs` download job attempts (parallel batching like the former server tick).
+ * Stops when no pending jobs remain or cap is hit.
+ */
+export async function drainDownloadQueue(maxJobs = DEFAULT_DRAIN_MAX_JOBS) {
+  const { maxConcurrentDownloads } = getConfig();
+  let jobsAttempted = 0;
+  while (jobsAttempted < maxJobs) {
+    const batch = await Promise.all(
+      Array.from({ length: maxConcurrentDownloads }, () => processOneDownload())
+    );
+    const n = batch.filter(Boolean).length;
+    if (n === 0) break;
+    jobsAttempted += n;
   }
-  return { playlistsDue: due.length, playlistsPolled: polled, playlistsPollFailed: failed };
+  return { jobsAttempted };
+}
+
+/**
+ * Playlist metadata + track rows + download job creation (same as a scheduled poll for one playlist).
+ * On failure, updates `last_error` and returns `{ ok: false }`.
+ */
+export async function trySyncPlaylist(playlistId) {
+  const sql = getSql();
+  const rows = await sql`SELECT * FROM playlists WHERE id = ${playlistId}`;
+  const p = rows[0];
+  if (!p) return { ok: false, reason: "not_found" };
+  try {
+    await pollSinglePlaylist(sql, p);
+    return { ok: true };
+  } catch (e) {
+    await markPlaylistPollError(playlistId, String(e));
+    return { ok: false, error: String(e) };
+  }
 }
 
 export async function processOneDownload() {
