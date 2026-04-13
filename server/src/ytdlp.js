@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getConfig } from "./config.js";
@@ -8,29 +8,73 @@ let cookiesMissingLogged = false;
 let noCookiesHintLogged = false;
 /** Path after materializing YTDLP_COOKIES_B64 (lazy). */
 let materializedCookiesPath = null;
+/** Skip re-validating same path + mtime. */
+let cookiesValidatedKey = null;
+
+/**
+ * yt-dlp expects UTF-8 Netscape cookies.txt. Binary (e.g. Chrome SQLite "Cookies") causes
+ * Python 'utf-8' codec can't decode byte… when Render mounts the wrong file type.
+ */
+function assertValidNetscapeCookiesFile(cookiePath) {
+  const buf = readFileSync(cookiePath);
+  if (!buf.length) {
+    throw new Error(`Cookies file is empty: ${cookiePath}`);
+  }
+  if (buf.length >= 15 && buf.toString("ascii", 0, 15) === "SQLite format 3") {
+    throw new Error(
+      `Cookies file at ${cookiePath} is a Chrome SQLite database, not Netscape cookies.txt. ` +
+        `Export a text cookies file per https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp`
+    );
+  }
+  const maxScan = Math.min(buf.length, 2 * 1024 * 1024);
+  const scan = buf.subarray(0, maxScan);
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(scan);
+  } catch {
+    throw new Error(
+      `Cookies file at ${cookiePath} is not valid UTF-8 (binary or wrong encoding). ` +
+        `Re-export as UTF-8 plain text; do not upload Chrome's SQLite Cookies file or a .zip.`
+    );
+  }
+  const preview = scan.toString("utf-8").replace(/^\ufeff/, "").slice(0, 1024);
+  if (!/^[\s\r\n]*(# Netscape HTTP Cookie File|# HTTP Cookie File)/m.test(preview)) {
+    throw new Error(
+      `Cookies file at ${cookiePath} does not look like Netscape format (expected "# Netscape HTTP Cookie File" or "# HTTP Cookie File" near the top).`
+    );
+  }
+}
 
 function cookiesFileForYtdlp() {
   const { ytdlpCookiesFile, ytdlpCookiesB64 } = getConfig();
+  let candidate = null;
   if (ytdlpCookiesFile && existsSync(ytdlpCookiesFile)) {
-    return ytdlpCookiesFile;
+    candidate = ytdlpCookiesFile;
   }
   if (ytdlpCookiesFile && !existsSync(ytdlpCookiesFile) && !cookiesMissingLogged) {
     cookiesMissingLogged = true;
     console.warn(`[ytdlp] YTDLP_COOKIES_FILE is set but file not found: ${ytdlpCookiesFile}`);
   }
-  if (ytdlpCookiesB64) {
+  if (!candidate && ytdlpCookiesB64) {
     try {
       if (!materializedCookiesPath) {
         materializedCookiesPath = path.join("/tmp", "localify-ytdlp-cookies.txt");
         writeFileSync(materializedCookiesPath, Buffer.from(ytdlpCookiesB64, "base64"), { mode: 0o600 });
       }
-      return materializedCookiesPath;
+      candidate = materializedCookiesPath;
     } catch (e) {
       console.error("[ytdlp] YTDLP_COOKIES_B64 could not be decoded or written:", e.message);
       return null;
     }
   }
-  return null;
+  if (!candidate) return null;
+
+  const st = statSync(candidate);
+  const key = `${candidate}\0${st.mtimeMs}`;
+  if (cookiesValidatedKey !== key) {
+    assertValidNetscapeCookiesFile(candidate);
+    cookiesValidatedKey = key;
+  }
+  return candidate;
 }
 
 /** Global yt-dlp flags: ffmpeg path, then YouTube auth cookies if configured. */
