@@ -1,29 +1,57 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getConfig } from "./config.js";
 
 let cookiesMissingLogged = false;
+let noCookiesHintLogged = false;
+/** Path after materializing YTDLP_COOKIES_B64 (lazy). */
+let materializedCookiesPath = null;
+
+function cookiesFileForYtdlp() {
+  const { ytdlpCookiesFile, ytdlpCookiesB64 } = getConfig();
+  if (ytdlpCookiesFile && existsSync(ytdlpCookiesFile)) {
+    return ytdlpCookiesFile;
+  }
+  if (ytdlpCookiesFile && !existsSync(ytdlpCookiesFile) && !cookiesMissingLogged) {
+    cookiesMissingLogged = true;
+    console.warn(`[ytdlp] YTDLP_COOKIES_FILE is set but file not found: ${ytdlpCookiesFile}`);
+  }
+  if (ytdlpCookiesB64) {
+    try {
+      if (!materializedCookiesPath) {
+        materializedCookiesPath = path.join("/tmp", "localify-ytdlp-cookies.txt");
+        writeFileSync(materializedCookiesPath, Buffer.from(ytdlpCookiesB64, "base64"), { mode: 0o600 });
+      }
+      return materializedCookiesPath;
+    } catch (e) {
+      console.error("[ytdlp] YTDLP_COOKIES_B64 could not be decoded or written:", e.message);
+      return null;
+    }
+  }
+  return null;
+}
 
 /** Global yt-dlp flags: ffmpeg path, then YouTube auth cookies if configured. */
 function ytdlpPrelude() {
-  const { ffmpegLocation, ytdlpCookiesFile, ytdlpCookiesFromBrowser } = getConfig();
+  const { ffmpegLocation, ytdlpCookiesFromBrowser } = getConfig();
   const out = [];
   if (ffmpegLocation) {
     out.push("--ffmpeg-location", ffmpegLocation);
   }
-  if (ytdlpCookiesFile) {
-    if (existsSync(ytdlpCookiesFile)) {
-      out.push("--cookies", ytdlpCookiesFile);
-    } else if (!cookiesMissingLogged) {
-      cookiesMissingLogged = true;
-      console.warn(
-        `[ytdlp] YTDLP_COOKIES_FILE is set but file not found: ${ytdlpCookiesFile}`
-      );
-    }
+  const cookiePath = cookiesFileForYtdlp();
+  if (cookiePath) {
+    out.push("--cookies", cookiePath);
   } else if (ytdlpCookiesFromBrowser) {
     out.push("--cookies-from-browser", ytdlpCookiesFromBrowser);
+  } else if (process.env.NODE_ENV === "production" && !noCookiesHintLogged) {
+    noCookiesHintLogged = true;
+    console.warn(
+      "[ytdlp] No YouTube cookies configured (YTDLP_COOKIES_FILE, YTDLP_COOKIES_B64, or YTDLP_COOKIES_FROM_BROWSER). " +
+        "Datacenter IPs often get “Sign in to confirm you’re not a bot”; export cookies per " +
+        "https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies"
+    );
   }
   return out;
 }
