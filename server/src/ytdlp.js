@@ -12,6 +12,37 @@ let materializedCookiesPath = null;
 let cookiesValidatedKey = null;
 
 /**
+ * Netscape cookies must be UTF-8 for yt-dlp. Some exports are UTF-16 (Windows "Unicode") or UTF-16 + BOM.
+ */
+function normalizeCookieBytesToUtf8(buf) {
+  if (!buf.length) return buf;
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    const text = new TextDecoder("utf-16le").decode(buf).replace(/^\ufeff/, "");
+    return Buffer.from(text, "utf-8");
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    const text = new TextDecoder("utf-16be").decode(buf).replace(/^\ufeff/, "");
+    return Buffer.from(text, "utf-8");
+  }
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(buf);
+    return buf;
+  } catch {
+    if (buf.length >= 2 && buf.length % 2 === 0) {
+      const text = new TextDecoder("utf-16le", { fatal: false }).decode(buf).replace(/^\ufeff/, "");
+      const head = text.slice(0, 512);
+      if (/^[\s\r\n]*(# Netscape HTTP Cookie File|# HTTP Cookie File)/m.test(head)) {
+        return Buffer.from(text, "utf-8");
+      }
+    }
+    throw new Error(
+      "Cookie bytes are not UTF-8 and do not look like UTF-16 Netscape cookies. " +
+        "Save cookies.txt as UTF-8 (or UTF-16 with BOM), or use a Render Secret File with raw UTF-8 text."
+    );
+  }
+}
+
+/**
  * yt-dlp expects UTF-8 Netscape cookies.txt. Binary (e.g. Chrome SQLite "Cookies") causes
  * Python 'utf-8' codec can't decode byte… when Render mounts the wrong file type.
  */
@@ -47,25 +78,41 @@ function assertValidNetscapeCookiesFile(cookiePath) {
 function cookiesFileForYtdlp() {
   const { ytdlpCookiesFile, ytdlpCookiesB64 } = getConfig();
   let candidate = null;
-  if (ytdlpCookiesFile && existsSync(ytdlpCookiesFile)) {
-    candidate = ytdlpCookiesFile;
-  }
-  if (ytdlpCookiesFile && !existsSync(ytdlpCookiesFile) && !cookiesMissingLogged) {
-    cookiesMissingLogged = true;
-    console.warn(`[ytdlp] YTDLP_COOKIES_FILE is set but file not found: ${ytdlpCookiesFile}`);
-  }
-  if (!candidate && ytdlpCookiesB64) {
+
+  if (ytdlpCookiesFile) {
+    if (existsSync(ytdlpCookiesFile)) {
+      candidate = ytdlpCookiesFile;
+    } else {
+      if (!cookiesMissingLogged) {
+        cookiesMissingLogged = true;
+        console.warn(
+          `[ytdlp] YTDLP_COOKIES_FILE is "${ytdlpCookiesFile}" but that path does not exist here. ` +
+            `On Render, secret files are usually at /etc/secrets/<filename> (match the upload name exactly). ` +
+            `While this var is set, YTDLP_COOKIES_B64 is ignored — remove or fix COOKIES_FILE, or unset COOKIES_FILE to use B64 only.`
+        );
+      }
+      return null;
+    }
+  } else if (ytdlpCookiesB64) {
     try {
       if (!materializedCookiesPath) {
         materializedCookiesPath = path.join("/tmp", "localify-ytdlp-cookies.txt");
-        writeFileSync(materializedCookiesPath, Buffer.from(ytdlpCookiesB64, "base64"), { mode: 0o600 });
+        const b64 = ytdlpCookiesB64.replace(/\s+/g, "");
+        const raw = Buffer.from(b64, "base64");
+        if (!raw.length) {
+          throw new Error("YTDLP_COOKIES_B64 decoded to empty buffer (check the secret value)");
+        }
+        const utf8 = normalizeCookieBytesToUtf8(raw);
+        writeFileSync(materializedCookiesPath, utf8, { mode: 0o600 });
       }
       candidate = materializedCookiesPath;
     } catch (e) {
       console.error("[ytdlp] YTDLP_COOKIES_B64 could not be decoded or written:", e.message);
+      materializedCookiesPath = null;
       return null;
     }
   }
+
   if (!candidate) return null;
 
   const st = statSync(candidate);

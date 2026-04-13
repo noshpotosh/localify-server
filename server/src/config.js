@@ -20,8 +20,8 @@ export function getConfig() {
     defaultPollIntervalSeconds: intEnv("DEFAULT_POLL_INTERVAL_SECONDS", 3600),
     logLevel: process.env.LOG_LEVEL || "info",
     ytdlpPath: process.env.YTDLP_PATH || "yt-dlp",
-    /** Netscape-format cookies.txt path; see yt-dlp wiki “Exporting YouTube cookies”. */
-    ytdlpCookiesFile: process.env.YTDLP_COOKIES_FILE || null,
+    /** Netscape-format cookies.txt; see yt-dlp wiki “Exporting YouTube cookies”. */
+    ytdlpCookiesFile: (process.env.YTDLP_COOKIES_FILE || "").trim() || null,
     /**
      * Base64 of the same Netscape cookies file — for hosts (e.g. Render) where you cannot mount a file.
      * Written once to /tmp at first yt-dlp use. Prefer rotating cookies; YouTube may revoke stale sessions.
