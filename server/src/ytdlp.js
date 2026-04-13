@@ -1,5 +1,12 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  constants as fsConstants,
+  existsSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getConfig } from "./config.js";
@@ -10,6 +17,19 @@ let noCookiesHintLogged = false;
 let materializedCookiesPath = null;
 /** Skip re-validating same path + mtime. */
 let cookiesValidatedKey = null;
+/** yt-dlp rewrites `--cookies` on exit; Render mounts `/etc/secrets` read-only — copy there first. */
+const WRITABLE_ENV_COOKIE_PATH = path.join("/tmp", "localify-ytdlp-cookies-from-env-file.txt");
+let writableEnvCookieSourceKey = null;
+
+function needsWritableCookieCopy(cookiePath) {
+  if (cookiePath.startsWith("/etc/secrets")) return true;
+  try {
+    accessSync(cookiePath, fsConstants.W_OK);
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 /**
  * Netscape cookies must be UTF-8 for yt-dlp. Some exports are UTF-16 (Windows "Unicode") or UTF-16 + BOM.
@@ -77,12 +97,10 @@ function assertValidNetscapeCookiesFile(cookiePath) {
 
 function cookiesFileForYtdlp() {
   const { ytdlpCookiesFile, ytdlpCookiesB64 } = getConfig();
-  let candidate = null;
+  let sourcePath = null;
 
   if (ytdlpCookiesFile) {
-    if (existsSync(ytdlpCookiesFile)) {
-      candidate = ytdlpCookiesFile;
-    } else {
+    if (!existsSync(ytdlpCookiesFile)) {
       if (!cookiesMissingLogged) {
         cookiesMissingLogged = true;
         console.warn(
@@ -93,6 +111,7 @@ function cookiesFileForYtdlp() {
       }
       return null;
     }
+    sourcePath = ytdlpCookiesFile;
   } else if (ytdlpCookiesB64) {
     try {
       if (!materializedCookiesPath) {
@@ -105,7 +124,7 @@ function cookiesFileForYtdlp() {
         const utf8 = normalizeCookieBytesToUtf8(raw);
         writeFileSync(materializedCookiesPath, utf8, { mode: 0o600 });
       }
-      candidate = materializedCookiesPath;
+      sourcePath = materializedCookiesPath;
     } catch (e) {
       console.error("[ytdlp] YTDLP_COOKIES_B64 could not be decoded or written:", e.message);
       materializedCookiesPath = null;
@@ -113,15 +132,23 @@ function cookiesFileForYtdlp() {
     }
   }
 
-  if (!candidate) return null;
+  if (!sourcePath) return null;
 
-  const st = statSync(candidate);
-  const key = `${candidate}\0${st.mtimeMs}`;
+  const st = statSync(sourcePath);
+  const key = `${sourcePath}\0${st.mtimeMs}`;
   if (cookiesValidatedKey !== key) {
-    assertValidNetscapeCookiesFile(candidate);
+    assertValidNetscapeCookiesFile(sourcePath);
     cookiesValidatedKey = key;
   }
-  return candidate;
+
+  if (ytdlpCookiesFile && needsWritableCookieCopy(sourcePath)) {
+    if (writableEnvCookieSourceKey !== key) {
+      writeFileSync(WRITABLE_ENV_COOKIE_PATH, readFileSync(sourcePath), { mode: 0o600 });
+      writableEnvCookieSourceKey = key;
+    }
+    return WRITABLE_ENV_COOKIE_PATH;
+  }
+  return sourcePath;
 }
 
 /** Global yt-dlp flags: ffmpeg path, then YouTube auth cookies if configured. */
