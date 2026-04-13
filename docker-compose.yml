@@ -25,11 +25,16 @@ services:
       PUBLIC_BASE_URL: http://localhost:8008
       DOWNLOAD_SIGNING_SECRET: ${DOWNLOAD_SIGNING_SECRET:-dev-change-me-use-openssl-rand-hex-32}
       SIGNED_URL_TTL_SECONDS: "3600"
-      SCHEDULER_TICK_SECONDS: "30"
       MAX_CONCURRENT_DOWNLOADS: "2"
       LOG_LEVEL: INFO
+      # YouTube: do NOT put huge YTDLP_COOKIES_B64 in a repo `.env` — `docker compose build` can fail with
+      # "argument list too long" (BuildKit inherits the env). Use a mounted file locally (see volume below).
+      # On Render, set YTDLP_COOKIES_B64 only in the dashboard (runtime), not in files used at image build.
+      YTDLP_COOKIES_FILE: ${YTDLP_COOKIES_FILE:-}
     volumes:
       - mediadata:/data/media
+      # If YTDLP_COOKIES_FILE is set (e.g. /secrets/youtube-cookies.txt), mount your Netscape cookies file:
+      # - ./youtube-cookies.txt:/secrets/youtube-cookies.txt:ro
     depends_on:
       db:
         condition: service_healthy

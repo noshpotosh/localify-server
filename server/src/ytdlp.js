@@ -153,10 +153,13 @@ function cookiesFileForYtdlp() {
 
 /** Global yt-dlp flags: ffmpeg path, then YouTube auth cookies if configured. */
 function ytdlpPrelude() {
-  const { ffmpegLocation, ytdlpCookiesFromBrowser } = getConfig();
+  const { ffmpegLocation, ytdlpCookiesFromBrowser, ytdlpJsRuntimes } = getConfig();
   const out = [];
   if (ffmpegLocation) {
     out.push("--ffmpeg-location", ffmpegLocation);
+  }
+  if (ytdlpJsRuntimes) {
+    out.push("--js-runtimes", ytdlpJsRuntimes);
   }
   const cookiePath = cookiesFileForYtdlp();
   if (cookiePath) {

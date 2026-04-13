@@ -30,8 +30,11 @@ export function getConfig() {
     /** e.g. `chrome` — local dev only; not usable in typical Docker images. */
     ytdlpCookiesFromBrowser: process.env.YTDLP_COOKIES_FROM_BROWSER || null,
     ffmpegLocation: process.env.FFMPEG_LOCATION || null,
+    /** Passed to yt-dlp `--js-runtimes` (e.g. `node`). Empty = auto-detect. Docker sets `node` via ENV. */
+    ytdlpJsRuntimes: (process.env.YTDLP_JS_RUNTIMES || "").trim() || null,
     /** yt-dlp `-f` for audio downloads (`-x`). Default prefers pure audio, then any stream (still extracted to mp3). */
-    ytdlpDownloadFormat: (process.env.YTDLP_DOWNLOAD_FORMAT || "").trim() || "bestaudio/best",
+    ytdlpDownloadFormat:
+      (process.env.YTDLP_DOWNLOAD_FORMAT || "").trim() || "bestaudio/best/worstaudio/worst",
     port: intEnv("PORT", 8000),
     host: process.env.HOST || "0.0.0.0",
   };
