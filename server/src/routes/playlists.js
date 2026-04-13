@@ -122,32 +122,28 @@ export default async function playlistsRoutes(fastify) {
       const pendingBefore = pendingRows[0]?.n ?? 0;
       request.log.info(
         { playlistId, pendingDownloadJobs: pendingBefore },
-        "playlist refresh: running download drain (awaited in this request)"
+        "playlist refresh: sync complete; download drain runs in background (avoids HTTP timeout)"
       );
-      let drain = { jobsAttempted: 0, staleRunningRequeued: 0 };
-      try {
-        drain = await drainDownloadQueue();
-      } catch (e) {
-        request.log.error(e, "playlist refresh: download drain threw");
-        return reply.code(500).send({
-          detail: "Download worker failed after sync",
-          error: String(e).slice(0, 2000),
-        });
-      }
-      request.log.info(
-        {
-          playlistId,
-          downloadJobsAttempted: drain.jobsAttempted,
-          staleRunningRequeued: drain.staleRunningRequeued,
-          pendingBefore,
-        },
-        "playlist refresh: download drain finished"
-      );
-      return {
-        ok: true,
-        download_jobs_attempted: drain.jobsAttempted,
-        stale_running_jobs_requeued: drain.staleRunningRequeued,
-      };
+      const log = request.log;
+      setImmediate(() => {
+        void (async () => {
+          try {
+            const drain = await drainDownloadQueue();
+            log.info(
+              {
+                playlistId,
+                downloadJobsAttempted: drain.jobsAttempted,
+                staleRunningRequeued: drain.staleRunningRequeued,
+                pendingBefore,
+              },
+              "playlist refresh: background download drain finished"
+            );
+          } catch (e) {
+            log.error(e, "playlist refresh: background download drain failed");
+          }
+        })();
+      });
+      return { ok: true, download_drain: "started" };
     }
   );
 
